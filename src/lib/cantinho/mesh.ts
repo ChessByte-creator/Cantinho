@@ -24,6 +24,8 @@ type Peer = {
   ignore: boolean;
   pending: RTCIceCandidateInit[];
   presence?: Presence;
+  presenceV: number;
+  rosterName?: string;
   audioEl: HTMLAudioElement;
   audioMix: MediaStream;
   micSender?: RTCRtpSender;
@@ -50,7 +52,7 @@ export type MeshHooks = {
 };
 
 type Wire =
-  | { t: "presence"; p: Presence }
+  | { t: "presence"; p: Presence; v?: number }
   | { t: "chat"; m: ChatMsg }
   | { t: "history"; msgs: ChatMsg[] }
   | { t: "typing"; channelId: string; name: string }
@@ -61,6 +63,7 @@ export class CantinhoMesh {
   private room = "";
   private selfId = "";
   private presence: Presence | null = null;
+  private presenceV = 0;
   private settings: AudioSettings | null = null;
   private peers = new Map<string, Peer>();
   private closed = false;
@@ -84,11 +87,8 @@ export class CantinhoMesh {
     this.presence = presence;
     this.settings = settings;
     this.closed = false;
-    try {
-      await audio.ensure(settings);
-    } catch {
-      /* chat still works */
-    }
+    // Nao espera o navegador liberar o audio: a sinalizacao precisa comecar ja.
+    void audio.ensure(settings).catch(() => {});
     this.link = createSignalLink({
       room,
       peer: selfId,
@@ -137,12 +137,13 @@ export class CantinhoMesh {
   setPresence(presence: Presence) {
     const prevVoice = this.presence?.voiceId ?? null;
     this.presence = presence;
+    this.presenceV = Date.now();
     audio.setMuted(presence.muted || presence.deaf || !presence.voiceId);
     for (const p of this.peers.values()) {
       p.audioEl.muted = presence.deaf || !presence.voiceId || p.presence?.voiceId !== presence.voiceId;
       this.syncMedia(p);
     }
-    this.broadcast({ t: "presence", p: presence });
+    this.broadcast({ t: "presence", p: presence, v: this.presenceV });
     this.link?.rename(presence.name);
     if (prevVoice !== presence.voiceId) this.emitStage();
     this.emitPeers();
@@ -271,7 +272,7 @@ export class CantinhoMesh {
     const peers: PeerSnap[] = [...this.peers.values()].map((p) => ({
       id: p.id,
       presence: p.presence ?? {
-        name: "Conectando…",
+        name: p.rosterName || "Conectando…",
         color: "#4e5058",
         status: "",
         avatar: "",
@@ -284,6 +285,33 @@ export class CantinhoMesh {
       speaking: p.speaking,
     }));
     this.hooks.onPeers({ peers, meSpeaking: this.meSpeaking });
+  }
+
+  /** Minha presenca atual, para gravar no banco. */
+  snapshotPresence(): { presence: Presence; v: number } | null {
+    return this.presence ? { presence: this.presence, v: this.presenceV } : null;
+  }
+
+  /** Presenca dos outros vinda do banco (garantia caso a conexao direta atrase). */
+  applyRemotePresence(list: { id: string; v: number; presence: Presence }[]) {
+    if (this.closed) return;
+    for (const item of list) {
+      const peer = this.peers.get(item.id);
+      if (!peer) continue;
+      if (item.v && item.v === peer.presenceV) continue;
+      this.acceptPresence(peer, item.presence, item.v, true);
+    }
+  }
+
+  private acceptPresence(peer: Peer, raw: Presence, v: number, fromDb: boolean) {
+    if (v && v < peer.presenceV) return;
+    if (v) peer.presenceV = v;
+    const next = sanitizePresence(raw);
+    if (fromDb && !next.avatar && peer.presence?.avatar) next.avatar = peer.presence.avatar;
+    peer.presence = next;
+    this.syncMedia(peer);
+    this.emitPeers();
+    this.emitStage();
   }
 
   private broadcast(msg: Wire) {
@@ -305,6 +333,10 @@ export class CantinhoMesh {
     const alive = new Set(allow);
     for (const id of allow) {
       if (!this.peers.has(id)) this.connectTo(id, this.selfId > id);
+    }
+    for (const r of others) {
+      const known = this.peers.get(r.id);
+      if (known) known.rosterName = r.name;
     }
     for (const [id, peer] of this.peers) {
       if (!alive.has(id)) {
@@ -341,6 +373,7 @@ export class CantinhoMesh {
       lastVoice: 0,
       speaking: false,
       rx: null,
+      presenceV: 0,
       connection: pc.connectionState,
     };
     this.peers.set(id, peer);
@@ -392,7 +425,7 @@ export class CantinhoMesh {
     dc.binaryType = "arraybuffer";
     dc.bufferedAmountLowThreshold = 512 * 1024;
     dc.onopen = () => {
-      if (this.presence) this.send(peer, { t: "presence", p: this.presence });
+      if (this.presence) this.send(peer, { t: "presence", p: this.presence, v: this.presenceV });
       const msgs = this.hooks
         .history()
         .filter((m) => m.text && !m.system && !m.file)
@@ -418,10 +451,7 @@ export class CantinhoMesh {
       return;
     }
     if (msg.t === "presence") {
-      peer.presence = sanitizePresence(msg.p);
-      this.syncMedia(peer);
-      this.emitPeers();
-      this.emitStage();
+      this.acceptPresence(peer, msg.p, Number(msg.v) || 0, false);
     } else if (msg.t === "chat") {
       const m = sanitizeMsg(msg.m);
       if (m) this.hooks.onChat(m);

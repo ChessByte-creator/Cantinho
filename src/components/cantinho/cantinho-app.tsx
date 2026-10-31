@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, ServerMark } from "./icons";
 import { createChannel, createServer, listDirectory, type ChannelRow, type ServerRow } from "@/lib/cantinho/directory";
 import { audio } from "@/lib/cantinho/audio";
-import { listMessages, postMessage } from "@/lib/cantinho/messages";
+import { postMessage, syncRoom } from "@/lib/cantinho/messages";
 import { CantinhoMesh } from "@/lib/cantinho/mesh";
 import { SEED_CHANNELS, SEED_SERVERS } from "@/lib/cantinho/seed";
 import { normalizeSignalUrl, signalHost } from "@/lib/cantinho/signal-link";
@@ -211,12 +211,32 @@ export function CantinhoApp() {
     let timer: number | undefined;
     const tick = async () => {
       try {
-        const res = await listMessages({ data: { serverId, since } });
+        const snap = meshRef.current?.snapshotPresence() ?? null;
+        const res = await syncRoom({
+          data: {
+            serverId,
+            peerId: selfRef.current,
+            since,
+            v: snap?.v ?? 0,
+            presence: snap
+              ? {
+                  name: snap.presence.name.slice(0, 24),
+                  color: snap.presence.color,
+                  status: snap.presence.status.slice(0, 60),
+                  voiceId: snap.presence.voiceId,
+                  muted: snap.presence.muted,
+                  deaf: snap.presence.deaf,
+                  sharing: snap.presence.sharing,
+                }
+              : undefined,
+          },
+        });
         if (stop) return;
-        if (res.rows.length) {
-          since = Math.max(since, ...res.rows.map((r) => r.seq));
+        meshRef.current?.applyRemotePresence(res.presences);
+        if (res.messages.length) {
+          since = Math.max(since, ...res.messages.map((r) => r.seq));
           const known = new Set(messagesRef.current.map((m) => m.id));
-          const fresh: ChatMsg[] = res.rows
+          const fresh: ChatMsg[] = res.messages
             .filter((r) => !known.has(r.id))
             .map((r) => ({
               id: r.id,
@@ -374,6 +394,7 @@ export function CantinhoApp() {
     setMembersOpen(false);
     setUnread((prev) => ({ ...prev, [ch.id]: 0 }));
     if (ch.kind === "voice" && voiceId !== ch.id) {
+      void audio.ensure(settingsRef.current).catch(() => {});
       setVoiceId(ch.id);
       audio.blip(740);
     }

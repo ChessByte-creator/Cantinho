@@ -39,7 +39,11 @@ export class AudioEngine {
 
   async ensure(settings: AudioSettings) {
     this.settings = settings;
-    if (this.ctx) return;
+    if (this.ctx) {
+      // Navegadores (Android, iPhone) deixam o audio "suspenso" ate um toque: tenta de novo.
+      if (this.ctx.state === "suspended") void this.ctx.resume().catch(() => {});
+      return;
+    }
     const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
     this.ctx = new Ctx();
     this.an = this.ctx.createAnalyser();

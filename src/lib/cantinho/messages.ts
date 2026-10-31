@@ -3,10 +3,12 @@ import { z } from "zod";
 import { getSql, type Sql } from "@/lib/db";
 
 /**
- * Chat de texto guardado no banco (Neon). Serve de garantia: mesmo quando a
- * conexao direta entre os aparelhos (P2P) nao abre, as mensagens chegam.
+ * Sincronizacao da sala pelo banco (Neon):
+ * - mensagens de texto (guardadas por 7 dias);
+ * - presenca (quem esta online, em qual sala de voz, mutado, transmitindo).
+ * Serve de garantia: mesmo quando a conexao direta entre os aparelhos (P2P)
+ * atrasa ou falha, texto e lista de pessoas continuam certos.
  * Imagens, arquivos, voz e tela continuam indo direto entre os aparelhos.
- * Mensagens com mais de 7 dias sao apagadas automaticamente.
  */
 
 const ID = z.string().regex(/^[a-zA-Z0-9_-]{1,64}$/);
@@ -20,6 +22,21 @@ export type MessageRow = {
   color: string;
   text: string;
   ts: number;
+};
+
+export type PresenceRow = {
+  id: string;
+  v: number;
+  presence: {
+    name: string;
+    color: string;
+    status: string;
+    avatar: string;
+    voiceId: string | null;
+    muted: boolean;
+    deaf: boolean;
+    sharing: boolean;
+  };
 };
 
 const globalRef = globalThis as typeof globalThis & {
@@ -44,6 +61,16 @@ function ensureSchema(sql: Sql): Promise<void> {
     );
     await sql.query(
       `CREATE INDEX IF NOT EXISTS chat_messages_server_seq ON chat_messages (server_id, seq)`,
+    );
+    await sql.query(
+      `CREATE TABLE IF NOT EXISTS chat_presence (
+         server_id TEXT NOT NULL,
+         peer_id TEXT NOT NULL,
+         data JSONB NOT NULL,
+         v BIGINT NOT NULL DEFAULT 0,
+         updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+         PRIMARY KEY (server_id, peer_id)
+       )`,
     );
   })().catch((err) => {
     globalRef.__chatSchemaPromise__ = undefined;
@@ -82,13 +109,46 @@ export const postMessage = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
-export const listMessages = createServerFn({ method: "POST" })
+const presenceSchema = z.object({
+  name: z.string().max(24),
+  color: z.string().max(32),
+  status: z.string().max(60),
+  voiceId: z.string().max(40).nullable(),
+  muted: z.boolean(),
+  deaf: z.boolean(),
+  sharing: z.boolean(),
+});
+
+/** Uma unica chamada por ciclo: grava minha presenca e devolve mensagens novas + presenca dos outros. */
+export const syncRoom = createServerFn({ method: "POST" })
   .validator((input: unknown) =>
-    z.object({ serverId: ID, since: z.number().int().min(0) }).parse(input),
+    z
+      .object({
+        serverId: ID,
+        peerId: ID,
+        since: z.number().int().min(0),
+        v: z.number().int().min(0),
+        presence: presenceSchema.optional(),
+      })
+      .parse(input),
   )
   .handler(async ({ data }) => {
     const sql = await getSql();
     await ensureSchema(sql);
+
+    if (data.presence) {
+      await sql.query(
+        `INSERT INTO chat_presence (server_id, peer_id, data, v, updated_at)
+         VALUES ($1, $2, $3::jsonb, $4, now())
+         ON CONFLICT (server_id, peer_id)
+         DO UPDATE SET data = EXCLUDED.data, v = EXCLUDED.v, updated_at = now()`,
+        [data.serverId, data.peerId, JSON.stringify(data.presence), data.v],
+      );
+    }
+    if (Math.random() < 0.02) {
+      await sql.query(`DELETE FROM chat_presence WHERE updated_at < now() - interval '1 day'`);
+    }
+
     const cols = `seq, id, channel_id AS "channelId", author_id AS "authorId", name, color, text, ts`;
     const raw =
       data.since > 0
@@ -102,7 +162,19 @@ export const listMessages = createServerFn({ method: "POST" })
               [data.serverId],
             )
           ).reverse();
+
+    const others = await sql.query<{ id: string; v: number; data: PresenceRow["presence"] }>(
+      `SELECT peer_id AS id, v, data FROM chat_presence
+       WHERE server_id = $1 AND peer_id <> $2 AND updated_at > now() - interval '20 seconds'`,
+      [data.serverId, data.peerId],
+    );
+
     return {
-      rows: raw.map((r) => ({ ...r, seq: Number(r.seq), ts: Number(r.ts) })) as MessageRow[],
+      messages: raw.map((r) => ({ ...r, seq: Number(r.seq), ts: Number(r.ts) })) as MessageRow[],
+      presences: others.map((r) => ({
+        id: r.id,
+        v: Number(r.v),
+        presence: { ...r.data, avatar: "" },
+      })) as PresenceRow[],
     };
   });
