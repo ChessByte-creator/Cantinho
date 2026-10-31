@@ -1,0 +1,108 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #313338;
+  --color-side: #2b2d31;
+  --color-rail: #1e1f22;
+  --color-panel: #232428;
+  --color-field: #383a40;
+  --color-hover: #35373c;
+  --color-line: #3f4147;
+  --color-fg: #dbdee1;
+  --color-head: #f2f3f5;
+  --color-muted: #949ba4;
+  --color-brand: #5865f2;
+  --color-brand-h: #4752c4;
+  --color-ok: #23a559;
+  --color-bad: #f23f43;
+  --color-link: #00a8fc;
+  --color-warn: #f0b132;
+  --color-on: #ffffff;
+  --color-scroll: #1a1b1e;
+  --font-sans: "Noto Sans", "Segoe UI", "Helvetica Neue", helvetica, arial, sans-serif;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 16px;
+}
+
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+
+  html,
+  body {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-rail);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-size: 1rem;
+    line-height: 1.45;
+    color-scheme: dark;
+    overscroll-behavior: none;
+  }
+
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  a:focus-visible,
+  [role="button"]:focus-visible {
+    outline: 2px solid var(--color-brand);
+    outline-offset: 2px;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-scroll) transparent;
+  }
+}
+
+dialog {
+  margin: auto;
+  background: var(--color-bg);
+  color: var(--color-fg);
+  border: 0;
+  border-radius: var(--radius-md);
+  padding: 0;
+  width: min(28rem, calc(100vw - 2rem));
+  box-shadow: 0 8px 28px rgb(0 0 0 / 0.5);
+  max-height: min(40rem, calc(100dvh - 2rem));
+  overflow: auto;
+}
+
+dialog::backdrop {
+  background: rgb(0 0 0 / 0.72);
+}
+
+.field {
+  width: 100%;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--color-rail);
+  padding: 0.65rem 0.75rem;
+  color: var(--color-fg);
+  font: inherit;
+  font-weight: 400;
+}
+
+.safe-bottom {
+  padding-bottom: max(0.25rem, env(safe-area-inset-bottom));
+}
+
+.app-safe {
+  padding-top: env(safe-area-inset-top);
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}
