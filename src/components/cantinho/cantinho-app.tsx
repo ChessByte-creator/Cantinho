@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Icon, ServerMark } from "./icons";
 import { createChannel, createServer, listDirectory, type ChannelRow, type ServerRow } from "@/lib/cantinho/directory";
 import { audio } from "@/lib/cantinho/audio";
+import { listMessages, postMessage } from "@/lib/cantinho/messages";
 import { CantinhoMesh } from "@/lib/cantinho/mesh";
 import { SEED_CHANNELS, SEED_SERVERS } from "@/lib/cantinho/seed";
 import { normalizeSignalUrl, signalHost } from "@/lib/cantinho/signal-link";
@@ -201,6 +202,46 @@ export function CantinhoApp() {
     });
   }, []);
 
+  // Chat de texto pelo banco: garante a entrega mesmo sem conexao direta (P2P).
+  useEffect(() => {
+    if (!entered) return;
+    let stop = false;
+    let since = 0;
+    let loaded = false;
+    let timer: number | undefined;
+    const tick = async () => {
+      try {
+        const res = await listMessages({ data: { serverId, since } });
+        if (stop) return;
+        if (res.rows.length) {
+          since = Math.max(since, ...res.rows.map((r) => r.seq));
+          const known = new Set(messagesRef.current.map((m) => m.id));
+          const fresh: ChatMsg[] = res.rows
+            .filter((r) => !known.has(r.id))
+            .map((r) => ({
+              id: r.id,
+              channelId: r.channelId,
+              authorId: r.authorId,
+              name: r.name,
+              color: r.color,
+              text: r.text,
+              ts: r.ts,
+            }));
+          if (fresh.length) pushMsgs(fresh, loaded);
+        }
+        loaded = true;
+      } catch {
+        /* tenta de novo no proximo ciclo */
+      }
+      if (!stop) timer = window.setTimeout(() => void tick(), document.hidden ? 5000 : 1500);
+    };
+    void tick();
+    return () => {
+      stop = true;
+      if (timer) window.clearTimeout(timer);
+    };
+  }, [entered, serverId, pushMsgs]);
+
   useEffect(() => {
     if (!entered || !profile.name.trim()) return;
     const presence = presenceNow(profile, voiceRef.current, muted, deaf, sharing);
@@ -371,6 +412,18 @@ export function CantinhoApp() {
     setText("");
     pushMsgs([msg], false);
     meshRef.current?.sendChat(msg);
+    void postMessage({
+      data: {
+        serverId,
+        id: msg.id,
+        channelId: msg.channelId,
+        authorId: msg.authorId,
+        name: msg.name.slice(0, 24) || "Anônimo",
+        color: msg.color,
+        text: msg.text ?? "",
+        ts: msg.ts,
+      },
+    }).catch(() => flash("Não consegui enviar pelo servidor. Tente de novo."));
     stickRef.current = true;
   }
 

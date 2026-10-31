@@ -81,18 +81,53 @@ const STALL_MS = 10_000;
 const MAX_RECOVERY_ATTEMPTS = 3;
 const SIGNAL_RETRY_DELAYS_MS = [250, 750];
 
+/**
+ * Servidores usados para achar o caminho entre os aparelhos.
+ * - VITE_STUN_URLS (opcional): lista de STUN separada por virgula.
+ * - VITE_ICE_SERVERS (opcional): cole aqui a lista "iceServers" que o servico de
+ *   TURN mostra (Metered, por exemplo). Aceita JSON ou o formato de objeto JS.
+ *   Com TURN, a conexao funciona mesmo entre Wi-Fi e dados moveis.
+ */
+function parseIceList(raw: string | undefined): RTCIceServer[] {
+  if (!raw || !raw.trim()) return [];
+  let text = raw.trim();
+  // Aceita "iceServers: [ ... ]" e objetos com chaves sem aspas ou aspas simples.
+  const open = text.indexOf("[");
+  const close = text.lastIndexOf("]");
+  if (open >= 0 && close > open) text = text.slice(open, close + 1);
+  const attempts = [
+    text,
+    text
+      .replace(/([{,]\s*)(urls|username|credential)\s*:/g, '$1"$2":')
+      .replace(/'/g, '"')
+      .replace(/,\s*([}\]])/g, "$1"),
+  ];
+  for (const candidate of attempts) {
+    try {
+      const parsed: unknown = JSON.parse(candidate);
+      if (Array.isArray(parsed)) {
+        return parsed.filter(
+          (s): s is RTCIceServer => !!s && typeof s === "object" && "urls" in (s as object),
+        );
+      }
+    } catch {
+      /* tenta a proxima forma */
+    }
+  }
+  console.warn("VITE_ICE_SERVERS invalido; usando so STUN.");
+  return [];
+}
+
 export function defaultIceServers(): RTCIceServer[] {
   const urls = (import.meta.env.VITE_STUN_URLS as string | undefined)
     ?.split(",")
     .map((u) => u.trim())
     .filter(Boolean);
-  // Two independent providers: ICE queries all of them in parallel during
-  // gathering, so either one being unreachable costs nothing.
-  return [
-    {
-      urls: urls?.length ? urls : ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"],
-    },
-  ];
+  // Dois provedores STUN independentes: o ICE consulta todos em paralelo.
+  const stun: RTCIceServer = {
+    urls: urls?.length ? urls : ["stun:stun.l.google.com:19302", "stun:stun.cloudflare.com:3478"],
+  };
+  return [stun, ...parseIceList(import.meta.env.VITE_ICE_SERVERS as string | undefined)];
 }
 
 export class P2PRoom {
