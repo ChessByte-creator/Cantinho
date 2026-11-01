@@ -66,6 +66,7 @@ export function CantinhoApp() {
   const [formError, setFormError] = useState("");
   const [busy, setBusy] = useState(false);
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
+  const [diag, setDiag] = useState<string[] | null>(null);
   const [meter, setMeter] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -1198,6 +1199,19 @@ export function CantinhoApp() {
             cole o endereço aqui. No plano grátis a primeira chamada pode demorar enquanto ele acorda.
             {signalUrl ? ` Ligado em ${signalHost(signalUrl)}.` : ""}
           </p>
+          <div className="grid gap-2">
+            <Btn
+              onClick={async () => {
+                setDiag(["Verificando…"]);
+                setDiag((await meshRef.current?.diagnostics()) ?? ["Sem conexão ativa."]);
+              }}
+            >
+              Diagnóstico da chamada
+            </Btn>
+            {diag ? (
+              <pre className="max-h-64 overflow-auto rounded-sm bg-black/30 p-3 text-xs whitespace-pre-wrap">{diag.join("\n")}</pre>
+            ) : null}
+          </div>
         </div>
       </Modal>
 

@@ -351,8 +351,52 @@ export class CantinhoMesh {
     }
     this.emitPeers();
     this.emitStage();
-    const connecting = [...this.peers.values()].some((p) => p.connection !== "connected");
+    const connecting = [...this.peers.values()].some(
+      (p) => p.connection !== "connected" || p.pc.signalingState !== "stable" || p.making,
+    );
     this.link?.setFast(connecting || this.peers.size === 0);
+  }
+
+  /** Texto de diagnostico para entender por que voz ou tela nao chegam. */
+  async diagnostics(): Promise<string[]> {
+    const out: string[] = [];
+    const a = audio.debug();
+    out.push(`Audio local: contexto=${a.ctx}, microfone=${a.mic}, nivel=${a.level}%, comporta=${a.gate}, mudo=${a.wantMute}`);
+    out.push(`Eu: sala de voz=${this.presence?.voiceId ?? "nenhuma"}, transmitindo tela=${this.share ? "sim" : "nao"}`);
+    if (!this.peers.size) out.push("Nenhuma outra pessoa conectada.");
+    for (const p of this.peers.values()) {
+      const pc = p.pc;
+      out.push(
+        `- ${p.presence?.name ?? p.rosterName ?? p.id}: conexao=${pc.connectionState}, ice=${pc.iceConnectionState}, sinal=${pc.signalingState}, canal=${p.dc?.readyState ?? "sem"}, sala=${p.presence?.voiceId ?? "nenhuma"}`,
+      );
+      out.push(
+        `  enviando: mic=${p.micSender ? `sim (${p.micSender.track?.readyState ?? "sem faixa"})` : "nao"}, tela=${p.shareSenders.length} faixa(s)`,
+      );
+      out.push(
+        `  recebendo: audio=${p.audioMix.getAudioTracks().length} faixa(s), video=${p.videoTrack ? `${p.videoTrack.readyState}${p.videoTrack.muted ? "/sem quadros" : "/com quadros"}` : "nenhum"}`,
+      );
+      try {
+        const stats = await pc.getStats();
+        let sentA = 0;
+        let recvA = 0;
+        let sentV = 0;
+        let recvV = 0;
+        stats.forEach((r) => {
+          const s = r as unknown as Record<string, unknown>;
+          if (s.type === "outbound-rtp") {
+            if (s.kind === "audio") sentA += Number(s.bytesSent) || 0;
+            else sentV += Number(s.bytesSent) || 0;
+          } else if (s.type === "inbound-rtp") {
+            if (s.kind === "audio") recvA += Number(s.bytesReceived) || 0;
+            else recvV += Number(s.bytesReceived) || 0;
+          }
+        });
+        out.push(`  bytes: audio enviado=${sentA}, recebido=${recvA}; video enviado=${sentV}, recebido=${recvV}`);
+      } catch {
+        out.push("  bytes: indisponivel");
+      }
+    }
+    return out;
   }
 
   private connectTo(id: string, initiator: boolean) {
@@ -514,6 +558,7 @@ export class CantinhoMesh {
       }
       peer.shareSenders = [];
     }
+    this.link?.setFast(true);
   }
 
   private async tune(sender: RTCRtpSender) {

@@ -24,6 +24,7 @@ export class AudioEngine {
   private lastAbove = 0;
   private settings: AudioSettings | null = null;
   private wantMute = false;
+  private lastResume = 0;
 
   outputTrack(): MediaStreamTrack | null {
     return this.dest?.stream.getAudioTracks()[0] ?? null;
@@ -35,6 +36,21 @@ export class AudioEngine {
 
   level() {
     return this.levelNow;
+  }
+
+  debug() {
+    return {
+      ctx: this.ctx?.state ?? "nao criado",
+      mic: this.mic
+        ? this.mic
+            .getAudioTracks()
+            .map((t) => `${t.readyState}${t.muted ? "/mudo" : ""}${t.enabled ? "" : "/desligado"}`)
+            .join(",") || "sem faixa"
+        : "nao ligado",
+      level: Math.round(this.levelNow * 100),
+      gate: Math.round((this.gate?.gain.value ?? 0) * 100) / 100,
+      wantMute: this.wantMute,
+    };
   }
 
   async ensure(settings: AudioSettings) {
@@ -92,6 +108,11 @@ export class AudioEngine {
   tick(settings: AudioSettings): boolean {
     this.settings = settings;
     if (!this.an || !this.buf || !this.gate || !this.ctx) return false;
+    // Audio suspenso pelo navegador = microfone mudo para os outros. Tenta retomar a cada ~1s.
+    if (this.ctx.state === "suspended" && performance.now() - this.lastResume > 1000) {
+      this.lastResume = performance.now();
+      void this.ctx.resume().catch(() => {});
+    }
     this.levelNow = rms(this.an, this.buf);
     const now = performance.now();
     if (this.levelNow >= settings.gate / 100) this.lastAbove = now;
